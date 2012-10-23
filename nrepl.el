@@ -472,7 +472,7 @@ joined together.")
 (defmacro nrepl-dbind-response (response keys &rest body)
   "Destructure an nREPL response dict."
   `(let ,(loop for key in keys
-               collect `(,key (cdr (assoc ,(format "%s" key) ,response))))
+               collect `(,key (assoc ,(format "%s" key) ,response)))
      ,@body))
 
 (put 'nrepl-dbind-response 'lisp-indent-function 2)
@@ -489,28 +489,30 @@ joined together.")
         (cond (value
                (with-current-buffer buffer
                  (if ns
-                     (setq nrepl-buffer-ns ns)))
+                     (setq nrepl-buffer-ns (cdr ns))))
                (if value-handler
-                   (funcall value-handler buffer value)))
+                   (funcall value-handler buffer (cdr value))))
               (out
                (if stdout-handler
-                   (funcall stdout-handler buffer out)))
+                   (funcall stdout-handler buffer (cdr out))))
               (err
                (if stderr-handler
-                   (funcall stderr-handler buffer err)))
+                   (funcall stderr-handler buffer (cdr err))))
               (status
-               (if (member "interrupted" status)
-                   (message "Evaluation interrupted."))
-               (if (member "eval-error" status)
-                   (funcall nrepl-err-handler buffer ex root-ex session))
-               (if (member "namespace-not-found" status)
-                   (message "Namespace not found."))
-               (if (member "need-input" status)
-                   (nrepl-need-input buffer))
-               (if (member "done" status)
-                   (progn (remhash id nrepl-requests)
-                          (if done-handler
-                              (funcall done-handler buffer))))))))))
+               (let ((stat (cdr status)))
+                 (if (member "interrupted" stat)
+                     (message "Evaluation interrupted."))
+                 (if (member "eval-error" stat)
+                     (funcall nrepl-err-handler buffer (cdr ex)
+                              (cdr root-ex) (cdr session)))
+                 (if (member "namespace-not-found" stat)
+                     (message "Namespace not found."))
+                 (if (member "need-input" stat)
+                     (nrepl-need-input buffer))
+                 (if (member "done" stat)
+                     (progn (remhash (cdr id) nrepl-requests)
+                            (if done-handler
+                                (funcall done-handler buffer)))))))))))
 
 (defun nrepl-stdin-handler (buffer)
   (nrepl-make-response-handler buffer
@@ -1270,12 +1272,12 @@ Return the position of the prompt beginning."
   (nrepl-dbind-response response (out value)
     (cond
      (out
-      (nrepl-emit-interactive-output out)))))
+      (nrepl-emit-interactive-output (cdr out))))))
 
 (defun nrepl-dispatch (response)
   "Dispatch the response to associated callback."
   (nrepl-dbind-response response (id)
-    (let ((callback (gethash id nrepl-requests)))
+    (let ((callback (gethash (cdr id) nrepl-requests)))
       (if callback
           (funcall callback response)
         (nrepl-default-handler response)))))
@@ -1950,10 +1952,11 @@ restart the server."
 (defun nrepl-describe-handler (process-buffer)
   (lexical-let ((buffer process-buffer))
     (lambda (response)
-      (nrepl-dbind-response response (ops)
+      (nrepl-dbind-response response (id ops)
         (cond (ops
                (with-current-buffer buffer
-                 (setq nrepl-ops ops))))))))
+                 (setq nrepl-ops (cdr ops))
+                 (remhash (cdr id) nrepl-requests))))))))
 
 (defun nrepl-describe-session (process)
   (let ((buffer (process-buffer process)))
@@ -1972,8 +1975,8 @@ restart the server."
       (nrepl-dbind-response response (id new-session)
         (cond (new-session
                (with-current-buffer (process-buffer process)
-                 (setq nrepl-tooling-session new-session)
-                 (remhash id nrepl-requests))))))))
+                 (setq nrepl-tooling-session (cdr new-session))
+                 (remhash (cdr id) nrepl-requests))))))))
 
 (defun nrepl-new-session-handler (process &optional create-nrepl-buffer-p)
   (lexical-let ((process process)
@@ -1983,8 +1986,8 @@ restart the server."
         (cond (new-session
                (with-current-buffer (process-buffer process)
                  (message "Connected.  %s" (nrepl-random-words-of-inspiration))
-                 (setq nrepl-session new-session)
-                 (remhash id nrepl-requests)
+                 (setq nrepl-session (cdr new-session))
+                 (remhash (cdr id) nrepl-requests)
                  (if create-nrepl-buffer-p
                    (nrepl-create-nrepl-buffer process))
                  (run-hooks 'nrepl-connected-hook))))))))
