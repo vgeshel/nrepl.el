@@ -184,6 +184,12 @@ joined together.")
   :type 'boolean
   :group 'nrepl)
 
+(defcustom nrepl-popup-tooling-stacktraces nil
+  "Non-nil means pop-up error stacktraces from tooling calls.
+   Nil means do not.  It is often useful to enable for debugging tooling errors."
+  :type 'boolean
+  :group 'nrepl)
+
 (defcustom nrepl-tab-command 'nrepl-indent-and-complete-symbol
   "Selects the command to be invoked by the TAB key. The default option is
 `nrepl-indent-and-complete-symbol'. If you'd like to use the default
@@ -637,20 +643,20 @@ Uses `find-file'."
 
 (defun nrepl-default-err-handler (buffer ex root-ex session)
   ;; TODO: use ex and root-ex as fallback values to display when pst/print-stack-trace-not-found
-  (if (or nrepl-popup-stacktraces
-          (not (eq 'nrepl-mode
-                   (cdr (assq 'major-mode
-                              (buffer-local-variables buffer))))))
-      (with-current-buffer buffer
-        (nrepl-send-string "(if-let [pst+ (clojure.core/resolve 'clj-stacktrace.repl/pst+)]
+  ;; TODO: maybe put the stacktrace in a tmp buffer somewhere that the user
+  ;; can pull up with a hotkey only when interested in seeing it?
+  (cond ((and (not nrepl-popup-tooling-stacktraces)
+              (string-equal session (nrepl-current-tooling-session)))
+         (message "%s" ex))
+        ((or nrepl-popup-stacktraces
+             (not (eq 'nrepl-mode (cdr (assq 'major-mode (buffer-local-variables buffer))))))
+         (with-current-buffer buffer
+           (nrepl-send-string "(if-let [pst+ (clojure.core/resolve 'clj-stacktrace.repl/pst+)]
                         (pst+ *e) (clojure.stacktrace/print-stack-trace *e))"
-                           (nrepl-make-response-handler
-                            (nrepl-popup-buffer nrepl-error-buffer)
-                            nil
-                            'nrepl-emit-into-color-buffer nil nil) nil session))
-    ;; TODO: maybe put the stacktrace in a tmp buffer somewhere that the user
-    ;; can pull up with a hotkey only when interested in seeing it?
-    ))
+                              (nrepl-make-response-handler
+                               (nrepl-popup-buffer nrepl-error-buffer)
+                               nil
+                               'nrepl-emit-into-color-buffer nil nil) nil session)))))
 
 (defun nrepl-need-input (buffer)
   (with-current-buffer buffer
