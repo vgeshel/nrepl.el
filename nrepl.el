@@ -203,6 +203,16 @@ you'd like to use the default Emacs behavior use
 
 (defvar nrepl-pretty nil)
 
+(defcustom nrepl-kill-server-buffer-on-process-death nil
+  "Non-nil means to kill *nrepl-server* when the clojure process dies"
+  :type 'boolean
+  :group 'nrepl)
+
+(defcustom nrepl-reuse-nrepl-buffer t
+  "Non-nil means *nrepl* buffer will be reused if exists"
+  :type 'boolean
+  :group 'nrepl)
+
 (defun nrepl-make-variables-buffer-local (&rest variables)
   "Make all VARIABLES buffer local."
   (mapcar #'make-variable-buffer-local variables))
@@ -1458,10 +1468,11 @@ Assume that any error during decoding indicates an incomplete message."
 
 (defun nrepl-sentinel (process message)
   (message "nrepl connection closed: %s" message)
-  (if (equal (process-status process) 'closed)
-      (progn
-        (kill-buffer (process-buffer process))
-        (run-hooks 'nrepl-disconnected-hook))))
+  (when (and (equal (process-status process) 'closed)
+             nrepl-kill-server-buffer-on-process-death)
+    (progn
+               (kill-buffer (process-buffer process))
+               (run-hooks 'nrepl-disconnected-hook))))
 
 (defun nrepl-write-message (process message)
   (process-send-string process message))
@@ -2074,8 +2085,9 @@ under point, prompts for a var."
 (defun nrepl-server-filter (process output)
   (with-current-buffer (process-buffer process)
     (save-excursion
-      (goto-char (point-max))
-      (insert output)))
+      (save-restriction
+        (goto-char (point-max))
+        (insert output))))
   (when (string-match "nREPL server started on port \\([0-9]+\\)" output)
     (let ((port (string-to-number (match-string 1 output))))
       (message (format "nREPL server started on %s" port))
@@ -2087,7 +2099,7 @@ under point, prompts for a var."
                       (with-current-buffer b
                         (buffer-substring (point-min) (point-max)))
                     "")))
-    (when b
+    (when (and b nrepl-kill-server-buffer-on-process-death)
       (kill-buffer b))
     (cond
      ((string-match "^killed" event)
@@ -2160,7 +2172,9 @@ If so ask the user for confirmation."
                       ,nrepl-macroexpansion-buffer))
     (when (get-buffer-process buf-name)
       (delete-process (get-buffer-process buf-name)))
-    (when (get-buffer buf-name)
+    (when (and (get-buffer buf-name)
+               (or (string-equal buf-name nrepl-connection-buffer)
+                   nrepl-kill-server-buffer-on-process-death))
       (kill-buffer buf-name)))
   (nrepl-disable-on-existing-clojure-buffers))
 
@@ -2223,7 +2237,8 @@ restart the server."
                  (run-hooks 'nrepl-connected-hook))))))))
 
 (defun nrepl-init-client-sessions (process)
-  (nrepl-create-client-session (nrepl-new-session-handler process t))
+  (nrepl-create-client-session (nrepl-new-session-handler process t ;;(not nrepl-reuse-nrepl-buffer)
+                                                          ))
   (nrepl-create-client-session (nrepl-new-tooling-session-handler process)))
 
 (defun nrepl-connect (host port)
