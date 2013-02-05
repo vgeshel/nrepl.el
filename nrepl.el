@@ -7,7 +7,7 @@
 ;; URL: http://www.github.com/kingtim/nrepl.el
 ;; Version: 0.1.7
 ;; Keywords: languages, clojure, nrepl
-;; Package-Requires: ((clojure-mode "1.11"))
+;; Package-Requires: ((clojure-mode "2.0.0"))
 
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -56,6 +56,7 @@
 (require 'eldoc)
 (require 'cl)
 (require 'easymenu)
+(require 'compile)
 
 (eval-when-compile
   (defvar paredit-version))
@@ -100,6 +101,7 @@
 (defconst nrepl-doc-buffer "*nrepl-doc*")
 (defconst nrepl-src-buffer "*nrepl-src*")
 (defconst nrepl-macroexpansion-buffer "*nrepl-macroexpansion*")
+(defconst nrepl-result-buffer "*nrepl-result*")
 
 (defface nrepl-prompt-face
   '((t (:inherit font-lock-keyword-face)))
@@ -124,6 +126,11 @@
 (defface nrepl-result-face
   '((t ()))
   "Face for the result of an evaluation in the nREPL client."
+  :group 'nrepl)
+
+(defface nrepl-error-highlight-face
+  '((t (:inherit font-lock-warning-face :underline t)))
+  "Face used to highlight compilation errors in Clojure buffers."
   :group 'nrepl)
 
 (defmacro nrepl-propertize-region (props &rest body)
@@ -201,7 +208,12 @@ you'd like to use the default Emacs behavior use
   :type 'symbol
   :group 'nrepl)
 
-(defvar nrepl-pretty nil)
+(defcustom nrepl-use-pretty-printing nil
+  "Control whether the results in REPL are pretty-printed or not.
+The `nrepl-toggle-pretty-printing' command can be used to interactively
+change the setting's value."
+  :type 'boolean
+  :group 'nrepl)
 
 (defcustom nrepl-kill-server-buffer-on-process-death nil
   "Non-nil means to kill *nrepl-server* when the clojure process dies"
@@ -388,8 +400,7 @@ Removes any leading slash if on Windows.  Uses `find-file'."
         (find-file path)
       (nrepl-find-resource resource))
     (goto-char (point-min))
-    (forward-line (1- line))
-    (search-forward-regexp "(def[^\s]* +" nil t)))
+    (forward-line (1- line))))
 
 (defun nrepl-jump-to-def-handler (buffer)
   ;; TODO: got to be a simpler way to do this
@@ -405,10 +416,40 @@ Removes any leading slash if on Windows.  Uses `find-file'."
 
 (defun nrepl-jump-to-def (var)
   "Jump to the definition of the VAR at point."
-  (let ((form (format "((clojure.core/juxt
-                         (clojure.core/comp clojure.core/str clojure.java.io/resource :file)
-                         (clojure.core/comp clojure.core/str clojure.java.io/file :file) :line)
-                        (clojure.core/meta (clojure.core/ns-resolve '%s '%s)))"
+  (let ((form (format "(let [ns-symbol    '%s
+                             ns-var       '%s
+                             ns-file      (clojure.core/comp :file
+                                                             clojure.core/meta
+                                                             clojure.core/second
+                                                             clojure.core/first
+                                                             clojure.core/ns-publics)
+                             resource-str (clojure.core/comp clojure.core/str
+                                                             clojure.java.io/resource
+                                                             ns-file)
+                             file-str     (clojure.core/comp clojure.core/str
+                                                             clojure.java.io/file
+                                                             ns-file)]
+                         (cond ((clojure.core/ns-aliases ns-symbol) ns-var)
+                               (let [resolved-ns ((clojure.core/ns-aliases ns-symbol) ns-var)]
+                                 [(resource-str resolved-ns)
+                                  (file-str resolved-ns)
+                                  1])
+
+                               (find-ns ns-var)
+                               [(resource-str ns-var)
+                                (file-str ns-var)
+                                1]
+
+                               (clojure.core/ns-resolve ns-symbol ns-var)
+                               ((clojure.core/juxt
+                                 (clojure.core/comp clojure.core/str
+                                                    clojure.java.io/resource
+                                                    :file)
+                                 (clojure.core/comp clojure.core/str
+                                                    clojure.java.io/file
+                                                    :file)
+                                 :line)
+                                (clojure.core/meta (clojure.core/ns-resolve ns-symbol ns-var)))))"
                       (nrepl-current-ns) var)))
     (nrepl-send-string form
                        (nrepl-jump-to-def-handler (current-buffer))
@@ -680,16 +721,43 @@ Removes any leading slash if on Windows.  Uses `find-file'."
   ;; TODO: use ex and root-ex as fallback values to display when pst/print-stack-trace-not-found
   (if (or nrepl-popup-stacktraces
           (not (member (buffer-local-value 'major-mode buffer) '(nrepl-mode clojure-mode))))
-      (with-current-buffer buffer
-        (nrepl-send-string "(if-let [pst+ (clojure.core/resolve 'clj-stacktrace.repl/pst+)]
+      (progn
+        (with-current-buffer buffer
+          (nrepl-send-string "(if-let [pst+ (clojure.core/resolve 'clj-stacktrace.repl/pst+)]
                         (pst+ *e) (clojure.stacktrace/print-stack-trace *e))"
-                           (nrepl-make-response-handler
-                            (nrepl-popup-buffer nrepl-error-buffer)
-                            nil
-                            'nrepl-emit-into-color-buffer nil nil) nil session))
+                             (nrepl-make-response-handler
+                              (nrepl-popup-buffer nrepl-error-buffer)
+                              nil
+                              'nrepl-emit-into-color-buffer nil nil) nil session))
+        (with-current-buffer nrepl-error-buffer
+          (compilation-minor-mode +1))
+        (nrepl-highlight-compilation-error-line buffer))
     ;; TODO: maybe put the stacktrace in a tmp buffer somewhere that the user
     ;; can pull up with a hotkey only when interested in seeing it?
     ))
+
+(defun nrepl-highlight-compilation-error-line (buffer)
+  "Highlight compilation error line in BUFFER."
+  (with-current-buffer buffer
+    (let ((error-line-number (nrepl-extract-error-line (nrepl-stacktrace))))
+      (when (> error-line-number 0)
+        (save-excursion
+          (goto-char (point-min))
+          (forward-line (1- error-line-number))
+          (overlay-put (make-overlay (progn (back-to-indentation) (point))
+                                     (progn (move-end-of-line nil) (point)))
+                       'face 'nrepl-error-highlight-face))))))
+
+(defun nrepl-extract-error-line (stacktrace)
+  "Extract the error line number from STACKTRACE."
+  (string-match "\\.clj:\\([0-9]+\\)" stacktrace)
+  (string-to-number (match-string 1 stacktrace)))
+
+(defun nrepl-stacktrace ()
+  "Retrieve the current stracktrace from the `nrepl-error-buffer'."
+  (sleep-for 0.3) ; ugly hack to account for a race condition
+  (with-current-buffer nrepl-error-buffer
+    (substring-no-properties (buffer-string))))
 
 (defun nrepl-need-input (buffer)
   (with-current-buffer buffer
@@ -906,6 +974,16 @@ If invoked with a prefix argument, use 'macroexpand' instead of 'macroexpand-1'.
 Print its value into the current buffer"
   (interactive)
   (nrepl-interactive-eval-print (nrepl-last-expression)))
+
+(defun nrepl-pprint-eval-last-expression ()
+  "Evaluate the expression preceding point and pprint its value in a popup buffer."
+  (interactive)
+  (let ((form (nrepl-last-expression))
+        (result-buffer (nrepl-popup-buffer nrepl-result-buffer nil)))
+    (nrepl-send-string (format "(clojure.pprint/pprint %s)" form)
+                       (nrepl-popup-eval-out-handler result-buffer)
+                       nrepl-buffer-ns
+                       (nrepl-current-tooling-session))))
 
 ;;;;; History
 
@@ -1163,6 +1241,7 @@ This function is meant to be used in hooks to avoid lambda
     (define-key map (kbd "C-M-x") 'nrepl-eval-expression-at-point)
     (define-key map (kbd "C-x C-e") 'nrepl-eval-last-expression)
     (define-key map (kbd "C-c C-e") 'nrepl-eval-last-expression)
+    (define-key map (kbd "C-c C-p") 'nrepl-pprint-eval-last-expression)
     (define-key map (kbd "C-c C-r") 'nrepl-eval-region)
     (define-key map (kbd "C-c C-n") 'nrepl-eval-ns-form)
     (define-key map (kbd "C-c C-m") 'nrepl-macroexpand-1)
@@ -1186,6 +1265,7 @@ This function is meant to be used in hooks to avoid lambda
     ["Complete symbol" complete-symbol]
     ["Eval expression at point" nrepl-eval-expression-at-point]
     ["Eval last expression" nrepl-eval-last-expression]
+    ["Eval last expression in popup buffer" nrepl-pprint-eval-last-expression]
     ["Eval region" nrepl-eval-region]
     ["Eval ns form" nrepl-eval-ns-form]
     ["Macroexpand-1 last expression" nrepl-macroexpand-1]
@@ -1262,6 +1342,8 @@ This function is meant to be used in hooks to avoid lambda
     (define-key map (kbd "C-c C-p") 'nrepl-previous-prompt)
     (define-key map (kbd "C-c C-b") 'nrepl-interrupt)
     (define-key map (kbd "C-c C-j") 'nrepl-javadoc)
+    (define-key map (kbd "C-c C-m") 'nrepl-macroexpand-1)
+    (define-key map (kbd "C-c M-m") 'nrepl-macroexpand-all)
     map))
 
 (easy-menu-define nrepl-mode-menu nrepl-mode-map
@@ -1273,6 +1355,7 @@ This function is meant to be used in hooks to avoid lambda
     ["Display documentation" nrepl-doc]
     ["Display source" nrepl-src]
     ["Display JavaDoc" nrepl-javadoc]
+    ["Toggle pretty printing of results" nrepl-toggle-pretty-printing]
     ["Clear output" nrepl-clear-output]
     ["Clear buffer" nrepl-clear-buffer]
     ["Kill input" nrepl-kill-input]
@@ -1298,7 +1381,9 @@ Useful in hooks."
   nrepl-interaction-mode-map
   (make-local-variable 'completion-at-point-functions)
   (add-to-list 'completion-at-point-functions
-               'nrepl-complete-at-point))
+               'nrepl-complete-at-point)
+  (add-to-list 'compilation-error-regexp-alist
+               '("(\\(.+\\):\\(.+\\))" 1 2)))
 
 (define-derived-mode nrepl-mode fundamental-mode "nREPL"
   "Major mode for nREPL interactions.
@@ -1316,7 +1401,6 @@ Useful in hooks."
     (nrepl-history-load nrepl-history-file)
     (add-hook 'kill-buffer-hook 'nrepl-history-just-save t t)
     (add-hook 'kill-emacs-hook 'nrepl-history-just-save))
-
   (add-hook 'paredit-mode-hook
             (lambda ()
               (when (>= paredit-version 21)
@@ -1642,7 +1726,7 @@ If NEWLINE is true then add a newline at the end of the input."
       (overlay-put overlay 'read-only t)
       (overlay-put overlay 'face 'nrepl-input-face)))
   (let* ((input (nrepl-current-input))
-         (form (if (and (not (string-match "\\`[ \t\r\n]*\\'" input)) nrepl-pretty)
+         (form (if (and (not (string-match "\\`[ \t\r\n]*\\'" input)) nrepl-use-pretty-printing)
                    (format "(clojure.pprint/pprint %s)" input) input)))
     (goto-char (point-max))
     (nrepl-mark-input-start)
@@ -1754,15 +1838,12 @@ text property `nrepl-old-input'."
       (insert ")")))
   (nrepl-return))
 
-(defun nrepl-pretty-toggle ()
+(defun nrepl-toggle-pretty-printing ()
+  "Toggle pretty-printing in the REPL."
   (interactive)
-  (if nrepl-pretty
-      (progn
-       (setq nrepl-pretty nil)
-       (message "nrepl pretty printing now OFF"))
-    (progn
-     (setq nrepl-pretty t)
-     (message "nrepl pretty printing now ON"))))
+  (setq nrepl-use-pretty-printing (not nrepl-use-pretty-printing))
+  (message "Pretty printing in nREPL %s."
+           (if nrepl-use-pretty-printing "enabled" "disabled")))
 
 (defvar nrepl-clear-buffer-hook)
 
@@ -1923,7 +2004,8 @@ the buffer should appear."
 
 (defun nrepl-ido-form (ns)
   `(concat (if (find-ns (symbol ,ns))
-               (map name (keys (ns-interns (symbol ,ns)))))
+               (map name (concat (keys (ns-interns (symbol ,ns)))
+                                 (keys (ns-refers (symbol ,ns))))))
            (if (not= "" ,ns) [".."])
            (->> (all-ns)
              (map (fn [n]
@@ -1947,15 +2029,18 @@ the buffer should appear."
          (nrepl-ido-read-var (substring selected 0 -1) callback))
         ((equal ".." selected)
          (nrepl-ido-read-var (nrepl-ido-up-ns nrepl-ido-ns) callback))
-        (t (funcall callback (concat nrepl-ido-ns "/" selected)))))
+        ;; non ido variable selection techniques don't return qualified symbols, so this shouldn't either
+        (t (funcall callback selected))))
 
 (defun nrepl-ido-read-var-handler (ido-callback buffer)
   (lexical-let ((ido-callback ido-callback))
     (nrepl-make-response-handler buffer
                                  (lambda (buffer value)
-                                   (let* ((targets (car (read-from-string value)))
-                                          (selected (ido-completing-read "Var: " targets nil t)))
-                                     (nrepl-ido-select selected targets ido-callback)))
+                                   ;; make sure to eval the callback in the buffer that the symbol was requested from so we get the right namespace
+                                   (with-current-buffer buffer
+                                     (let* ((targets (car (read-from-string value)))
+                                            (selected (ido-completing-read "Var: " targets nil t)))
+                                       (nrepl-ido-select selected targets ido-callback))))
                                  nil nil nil)))
 
 (defun nrepl-ido-read-var (ns ido-callback)
@@ -2058,6 +2143,7 @@ under point, prompts for a var."
   "Load current buffer's file."
   (interactive)
   (check-parens)
+  (remove-overlays)
   (unless buffer-file-name
     (error "Buffer %s is not associated with a file" (buffer-name)))
   (when (and (buffer-modified-p)
