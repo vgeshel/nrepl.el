@@ -224,8 +224,8 @@ and it expects `clojure.pprint` to have been required already
 * <kbd>C-M-x</kbd>: Evaluate the top level form under point and display the result in the echo area.  If invoked with a prefix argument, insert the result into the current buffer.
 * <kbd>C-c C-r</kbd>: Evaluate the region and display the result in the echo area.
 * <kbd>C-c C-b</kbd>: Interrupt any pending evaluations.
-* <kbd>C-c C-m</kbd>: Invoke macroexpand-1 on the form preceding point and display the result in a macroexpansion buffer.  If invoked with a prefix argument, macroexpand is used instead of macroexpand-1.
-* <kbd>C-c M-m</kbd>: Invoke clojure.walk/macroexpand-all on the form preceding point and display the result in a macroexpansion buffer.
+* <kbd>C-c C-m</kbd>: Invoke macroexpand-1 on the form at point and display the result in a macroexpansion buffer.  If invoked with a prefix argument, macroexpand is used instead of macroexpand-1.
+* <kbd>C-c M-m</kbd>: Invoke clojure.walk/macroexpand-all on the form at point and display the result in a macroexpansion buffer.
 * <kbd>C-c C-n</kbd>: Eval the ns form.
 * <kbd>C-c M-n</kbd>: Switch the namespace of the repl buffer to the namespace of the current buffer.
 * <kbd>C-c C-z</kbd>: Select the repl buffer.
@@ -235,7 +235,7 @@ and it expects `clojure.pprint` to have been required already
 * <kbd>C-c C-d</kbd>: Display doc string for the symbol at point.  If invoked with a prefix argument, or no symbol is found at point, prompt for a symbol
 * <kbd>C-c C-s</kbd>: Display the source for the symbol at point.  If invoked with a prefix argument, or no symbol is found at point, prompt for a symbol
 * <kbd>C-c C-j</kbd>: Display JavaDoc (in your default browser) for the symbol at point.  If invoked with a prefix argument, or no symbol is found at point, prompt for a symbol
-* <kbd>M-.</kbd>: Jump to the definition of a var.  If invoked with a prefix argument, or no symbol is found at point, prompt for a var.
+* <kbd>M-.</kbd>: Jump to the definition of a symbol.  If invoked with a prefix argument, or no symbol is found at point, prompt for a symbol.
 * <kbd>M-,</kbd>: Return to your pre-jump location.
 * <kbd>M-TAB</kbd>: Complete the symbol at point. (For `auto-complete` integration, see [`ac-nrepl`](https://github.com/purcell/ac-nrepl))
 
@@ -261,8 +261,8 @@ uses the same search pattern (even if the current input has changed).
 
 ### Macroexpansion buffer commands:
 
-* <kbd>C-c C-m</kbd>: Invoke macroexpand-1 on the form preceding point and replace the original form with its expansion.  If invoked with a prefix argument, macroexpand is used instead of macroexpand-1.
-* <kbd>C-c M-m</kbd>: Invoke clojure.walk/macroexpand-all on the form preceding point and replace the original form with its expansion.
+* <kbd>C-c C-m</kbd>: Invoke macroexpand-1 on the form at point and replace the original form with its expansion.  If invoked with a prefix argument, macroexpand is used instead of macroexpand-1.
+* <kbd>C-c M-m</kbd>: Invoke clojure.walk/macroexpand-all on the form at point and replace the original form with its expansion.
 * <kbd>g</kbd>: The prior macroexpansion is performed again and the current contents of the macroexpansion buffer are replaced with the new expansion.
 * <kbd>C-/</kbd>, <kbd>C-x u</kbd>: Undo the last inplace expansion performed in the macroexpansion buffer.
 
